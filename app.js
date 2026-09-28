@@ -302,7 +302,8 @@ function columnHTML(person) {
     </li>`;
   }).join("") + "</ul>"
     : `<div class="empty">Nothing planned yet.${routines.length ? " Adding a task starts the day with these routines:" : ""}</div>
-       ${routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}`;
+       ${routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+       <button class="linkbtn routinebtn" data-action="settings">${routines.length ? "Edit daily routines" : "Set daily routines"}</button>`;
 
   return `<section class="col ${person}" aria-label="${esc(name)}">
     <div class="colhead"><span class="name">${esc(name)}</span><span class="count">${tasks.length ? done + " of " + tasks.length + " done" : ""}</span></div>
@@ -410,12 +411,12 @@ const dlg = document.getElementById("settings");
 function openSettings() {
   const s = state.settings;
   dlg.innerHTML = `<form class="dlg" method="dialog">
-    <h2>Names and routines</h2>
-    <p>Routines are added automatically when a new day starts. One per line.</p>
+    <h2>Names and daily routines</h2>
+    <p>Daily routines are added to a new day automatically when its first task is added. Write one per line.</p>
     <div class="fgrid">
       ${PEOPLE.map(p => `<div>
         <label for="n-${p}">Name${mySlot() === p ? " (you)" : ""}</label><input id="n-${p}" value="${esc(s.names[p])}" maxlength="30">
-        <label for="r-${p}" style="margin-top:12px">Routines</label><textarea id="r-${p}">${esc((s.recurring[p] || []).join("\n"))}</textarea>
+        <label for="r-${p}" style="margin-top:12px">Daily routines</label><textarea id="r-${p}">${esc((s.recurring[p] || []).join("\n"))}</textarea>
       </div>`).join("")}
     </div>
     <div class="pinset">
@@ -425,11 +426,6 @@ function openSettings() {
         <input id="pin2" type="password" inputmode="numeric" autocomplete="new-password" maxlength="${PIN_LENGTH}" placeholder="Again" aria-label="Repeat new PIN">
         <button class="pill" value="pin">Change</button>
       </div>
-    </div>
-    <div class="pinset">
-      <h3>Import past lists</h3>
-      <input id="importFile" type="file" accept=".json,application/json" aria-label="Choose an import file">
-      <div id="importMap"></div>
     </div>
     <div class="dlgbtns">
       <button class="pill signout" value="signout">Sign out</button>
@@ -466,57 +462,6 @@ async function changePin(a, b) {
   render();
   setTimeout(() => { if (state.banner === "PIN changed.") { state.banner = ""; render(); } }, 3000);
 }
-
-/* ---------- import (a JSON file kept on your computer, never uploaded to GitHub) ---------- */
-let importData = null;
-dlg.addEventListener("change", async e => {
-  if (e.target.id !== "importFile") return;
-  const box = dlg.querySelector("#importMap");
-  importData = null;
-  try {
-    const f = e.target.files[0]; if (!f) return;
-    const data = JSON.parse(await f.text());
-    if (data.type !== "daily-list-import" || !data.people || !data.days) throw new Error("format");
-    importData = data;
-    const keys = Object.keys(data.people);
-    const dates = Object.keys(data.days).sort();
-    box.innerHTML = `<p class="imphint">${dates.length} days, ${esc(dates[0])} to ${esc(dates[dates.length - 1])}. Days that already exist here will be replaced.</p>
-      ${keys.map((k, i) => `<div class="improw"><span>${esc(data.people[k])}</span>
-        <select data-impkey="${esc(k)}" aria-label="Column for ${esc(data.people[k])}">
-          ${PEOPLE.map((p, j) => `<option value="${p}" ${i === j ? "selected" : ""}>${esc(nameOf(p))}</option>`).join("")}
-        </select></div>`).join("")}
-      <button type="button" class="pill primary" id="importGo">Import</button>`;
-  } catch (_) {
-    box.innerHTML = '<p class="imphint">This file could not be read. Choose the .json import file.</p>';
-  }
-});
-dlg.addEventListener("click", async e => {
-  if (e.target.id !== "importGo" || !importData || state.readOnly) return;
-  const map = {};
-  dlg.querySelectorAll("[data-impkey]").forEach(sel => { map[sel.dataset.impkey] = sel.value; });
-  if (new Set(Object.values(map)).size !== Object.keys(map).length) {
-    dlg.querySelector(".imphint").textContent = "Choose a different column for each person.";
-    return;
-  }
-  e.target.disabled = true; e.target.textContent = "Importing…";
-  let n = 0;
-  try {
-    for (const [date, sides] of Object.entries(importData.days)) {
-      for (const [k, side] of Object.entries(sides)) {
-        const person = map[k]; if (!person) continue;
-        const tasks = (side.tasks || []).map(t => ({ id: t.id || uid(), text: String(t.text || ""), status: t.status || "", note: t.note || "", ...(t.emoji ? { emoji: t.emoji } : {}) }));
-        await setDoc(doc(db, "days", dayId(person, date)), { date, person, comment: side.comment || "", tasks, updatedAt: new Date().toISOString() });
-        n++;
-      }
-    }
-    state.banner = "Imported " + n + " daily lists.";
-  } catch (_) {
-    state.banner = "The import stopped after " + n + " lists. Try again.";
-  }
-  importData = null;
-  dlg.close("imported");
-  render();
-});
 
 /* ---------- start ---------- */
 onAuthStateChanged(auth, user => {
