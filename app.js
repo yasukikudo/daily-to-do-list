@@ -426,6 +426,11 @@ function openSettings() {
         <button class="pill" value="pin">Change</button>
       </div>
     </div>
+    <div class="pinset">
+      <h3>Import past lists</h3>
+      <input id="importFile" type="file" accept=".json,application/json" aria-label="Choose an import file">
+      <div id="importMap"></div>
+    </div>
     <div class="dlgbtns">
       <button class="pill signout" value="signout">Sign out</button>
       <button class="pill" value="cancel">Cancel</button>
@@ -461,6 +466,57 @@ async function changePin(a, b) {
   render();
   setTimeout(() => { if (state.banner === "PIN changed.") { state.banner = ""; render(); } }, 3000);
 }
+
+/* ---------- import (a JSON file kept on your computer, never uploaded to GitHub) ---------- */
+let importData = null;
+dlg.addEventListener("change", async e => {
+  if (e.target.id !== "importFile") return;
+  const box = dlg.querySelector("#importMap");
+  importData = null;
+  try {
+    const f = e.target.files[0]; if (!f) return;
+    const data = JSON.parse(await f.text());
+    if (data.type !== "daily-list-import" || !data.people || !data.days) throw new Error("format");
+    importData = data;
+    const keys = Object.keys(data.people);
+    const dates = Object.keys(data.days).sort();
+    box.innerHTML = `<p class="imphint">${dates.length} days, ${esc(dates[0])} to ${esc(dates[dates.length - 1])}. Days that already exist here will be replaced.</p>
+      ${keys.map((k, i) => `<div class="improw"><span>${esc(data.people[k])}</span>
+        <select data-impkey="${esc(k)}" aria-label="Column for ${esc(data.people[k])}">
+          ${PEOPLE.map((p, j) => `<option value="${p}" ${i === j ? "selected" : ""}>${esc(nameOf(p))}</option>`).join("")}
+        </select></div>`).join("")}
+      <button type="button" class="pill primary" id="importGo">Import</button>`;
+  } catch (_) {
+    box.innerHTML = '<p class="imphint">This file could not be read. Choose the .json import file.</p>';
+  }
+});
+dlg.addEventListener("click", async e => {
+  if (e.target.id !== "importGo" || !importData || state.readOnly) return;
+  const map = {};
+  dlg.querySelectorAll("[data-impkey]").forEach(sel => { map[sel.dataset.impkey] = sel.value; });
+  if (new Set(Object.values(map)).size !== Object.keys(map).length) {
+    dlg.querySelector(".imphint").textContent = "Choose a different column for each person.";
+    return;
+  }
+  e.target.disabled = true; e.target.textContent = "Importing…";
+  let n = 0;
+  try {
+    for (const [date, sides] of Object.entries(importData.days)) {
+      for (const [k, side] of Object.entries(sides)) {
+        const person = map[k]; if (!person) continue;
+        const tasks = (side.tasks || []).map(t => ({ id: t.id || uid(), text: String(t.text || ""), status: t.status || "", note: t.note || "", ...(t.emoji ? { emoji: t.emoji } : {}) }));
+        await setDoc(doc(db, "days", dayId(person, date)), { date, person, comment: side.comment || "", tasks, updatedAt: new Date().toISOString() });
+        n++;
+      }
+    }
+    state.banner = "Imported " + n + " daily lists.";
+  } catch (_) {
+    state.banner = "The import stopped after " + n + " lists. Try again.";
+  }
+  importData = null;
+  dlg.close("imported");
+  render();
+});
 
 /* ---------- start ---------- */
 onAuthStateChanged(auth, user => {
