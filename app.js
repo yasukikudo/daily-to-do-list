@@ -37,7 +37,8 @@ function saveEmail(v) { try { v ? localStorage.setItem("email", v) : localStorag
 const state = {
   user: undefined, days: {}, settings: EMPTY_SETTINGS, settingsLoaded: false, date: todayStr(),
   readOnly: false, openNotes: {}, openPicker: null, popId: null, banner: "",
-  pendingEmail: "", pin: "", pinErr: "", busy: false
+  pendingEmail: "", pin: "", pinErr: "", busy: false,
+  calMonth: todayStr().slice(0, 7), calOpen: false
 };
 let unsubs = [];
 
@@ -52,6 +53,9 @@ function weekOf(s) {
   const mon = addDays(s, -shift);
   return Array.from({ length: 7 }, (_, i) => addDays(mon, i));
 }
+
+function setDate(d) { state.date = d; state.calMonth = d.slice(0, 7); state.calOpen = false; }
+function shiftMonth(ym, n) { const [y, m] = ym.split("-").map(Number); const d = new Date(y, m - 1 + n, 1); return d.getFullYear() + "-" + pad(d.getMonth() + 1); }
 
 /* ---------- helpers ---------- */
 function esc(s) { return String(s ?? "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c])); }
@@ -118,9 +122,10 @@ function render() {
   const keep = a && a.dataset && a.dataset.key && app.contains(a)
     ? { key: a.dataset.key, value: a.value, s: a.selectionStart, e: a.selectionEnd } : null;
 
-  app.innerHTML = headerHTML() + weekHTML() +
+  app.innerHTML = `<div class="layout"><aside class="side" aria-label="Calendar">${calHTML()}</aside><div class="main">` +
+    headerHTML() + weekHTML() +
     (state.banner ? `<div class="banner" role="status">${esc(state.banner)}</div>` : "") +
-    '<div class="cols">' + PEOPLE.map(columnHTML).join("") + "</div>" + legendHTML();
+    '<div class="cols">' + PEOPLE.map(columnHTML).join("") + "</div>" + legendHTML() + "</div></div>";
 
   if (keep) {
     const el = app.querySelector('[data-key="' + CSS.escape(keep.key) + '"]');
@@ -230,10 +235,13 @@ function headerHTML() {
   const rel = state.date === t ? "Today" : state.date === addDays(t, 1) ? "Tomorrow" : state.date === addDays(t, -1) ? "Yesterday" : "";
   return `<header class="top">
     <div class="date">
-      <div class="daynum">${d.getDate()}</div>
-      <div class="dateinfo"><div class="rel">${rel}</div>
-        <div class="weekday">${d.toLocaleDateString("en-US", { weekday: "long" })}</div>
-        <div class="month">${d.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</div></div>
+      <button class="datebtn" data-action="cal" aria-label="Open calendar" aria-expanded="${state.calOpen}">
+        <span class="daynum">${d.getDate()}</span>
+        <span class="dateinfo"><span class="rel">${rel}</span>
+          <span class="weekday">${d.toLocaleDateString("en-US", { weekday: "long" })}</span>
+          <span class="month">${d.toLocaleDateString("en-US", { month: "long", year: "numeric" })} <span class="chev" aria-hidden="true">▾</span></span></span>
+      </button>
+      ${state.calOpen ? `<div class="calpop">${calHTML()}</div>` : ""}
     </div>
     <div class="controls">
       <button class="iconbtn" data-action="prev" aria-label="Previous day">‹</button>
@@ -249,6 +257,35 @@ function ratio(person, date) {
   const d = getDay(person, date);
   if (!d || !d.tasks.length) return 0;
   return d.tasks.filter(isDone).length / d.tasks.length;
+}
+
+function calHTML() {
+  const [y, m] = state.calMonth.split("-").map(Number);
+  const first = new Date(y, m - 1, 1);
+  const lead = (first.getDay() + 6) % 7;
+  const count = new Date(y, m, 0).getDate();
+  const t = todayStr();
+  let cells = "";
+  for (let i = 0; i < lead; i++) cells += "<span></span>";
+  for (let n = 1; n <= count; n++) {
+    const ds = state.calMonth + "-" + pad(n);
+    const dots = PEOPLE.map(p => {
+      const d = getDay(p, ds);
+      if (!d || !d.tasks.length) return '<i class="none"></i>';
+      return `<i class="${p}" style="opacity:${Math.max(0.3, ratio(p, ds)).toFixed(2)}"></i>`;
+    }).join("");
+    cells += `<button class="cd ${ds === state.date ? "sel" : ""} ${ds === t ? "today" : ""}" data-date="${ds}"
+      aria-label="${parse(ds).toDateString()}"><span>${n}</span><span class="cdots">${dots}</span></button>`;
+  }
+  return `<div class="cal">
+    <div class="calhead">
+      <button class="calnav" data-action="calprev" aria-label="Previous month">‹</button>
+      <span>${first.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
+      <button class="calnav" data-action="calnext" aria-label="Next month">›</button>
+    </div>
+    <div class="calgrid">${["M","T","W","T","F","S","S"].map(x => `<span class="cw">${x}</span>`).join("")}${cells}</div>
+    <button class="linkbtn caltoday" data-action="today">Back to today</button>
+  </div>`;
 }
 
 function weekHTML() {
@@ -328,14 +365,18 @@ app.addEventListener("click", e => {
     return;
   }
   const wd = e.target.closest("[data-date]");
-  if (wd) { state.date = wd.dataset.date; render(); return; }
+  if (wd) { setDate(wd.dataset.date); render(); return; }
   const b = e.target.closest("[data-action]");
+  const inCal = e.target.closest(".cal");
+  if (state.calOpen && !inCal && !(b && b.dataset.action === "cal")) { state.calOpen = false; if (!b) { render(); return; } }
   if (!b) return;
   const { action, person, id } = b.dataset;
-  if (action === "prev") state.date = addDays(state.date, -1);
-  else if (action === "next") state.date = addDays(state.date, 1);
-  else if (action === "today") state.date = todayStr();
-  else if (action === "tomorrow") state.date = addDays(todayStr(), 1);
+  if (action === "cal") { if (!matchMedia("(max-width: 899px)").matches) return; state.calOpen = !state.calOpen; state.calMonth = state.date.slice(0, 7); render(); return; }
+  if (action === "calprev" || action === "calnext") { state.calMonth = shiftMonth(state.calMonth, action === "calprev" ? -1 : 1); render(); return; }
+  if (action === "prev") setDate(addDays(state.date, -1));
+  else if (action === "next") setDate(addDays(state.date, 1));
+  else if (action === "today") setDate(todayStr());
+  else if (action === "tomorrow") setDate(addDays(todayStr(), 1));
   else if (action === "settings") { openSettings(); return; }
   else if (action === "status") {
     state.popId = id;
@@ -402,8 +443,9 @@ document.addEventListener("keydown", e => {
     return;
   }
   if (!state.user || !(e.target instanceof Element) || e.target.closest("input, textarea, dialog")) return;
-  if (e.key === "ArrowLeft") { state.date = addDays(state.date, -1); render(); }
-  if (e.key === "ArrowRight") { state.date = addDays(state.date, 1); render(); }
+  if (e.key === "Escape" && state.calOpen) { state.calOpen = false; render(); }
+  if (e.key === "ArrowLeft") { setDate(addDays(state.date, -1)); render(); }
+  if (e.key === "ArrowRight") { setDate(addDays(state.date, 1)); render(); }
 });
 
 /* ---------- settings ---------- */
