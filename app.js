@@ -310,12 +310,20 @@ function carryCandidates(person) {
   return prev.tasks.filter(t => CARRY.includes(t.status) && !have.has(t.text.trim().toLowerCase()));
 }
 
+// Routines not yet in this person's list for the shown day
+function missingRoutines(person) {
+  const cur = getDay(person, state.date);
+  const have = new Set((cur ? cur.tasks : []).map(t => t.text.trim().toLowerCase()));
+  return (state.settings.recurring[person] || []).filter(r => !have.has(r.trim().toLowerCase()));
+}
+
 function columnHTML(person) {
   const name = nameOf(person);
   const day = getDay(person, state.date);
   const tasks = day ? day.tasks : [];
   const done = tasks.filter(isDone).length;
   const carry = carryCandidates(person);
+  const missing = missingRoutines(person);
   const ro = state.readOnly ? "disabled" : "";
   const routines = state.settings.recurring[person] || [];
 
@@ -347,6 +355,7 @@ function columnHTML(person) {
     <input class="comment" data-field="comment" data-person="${person}" data-key="comment-${person}" value="${esc(day ? day.comment : "")}" placeholder="A line about the day" aria-label="Comment for the day" ${ro}>
     ${list}
     <div class="add"><span aria-hidden="true">+</span><input data-add="${person}" data-key="add-${person}" placeholder="Add a task" aria-label="Add a task for ${esc(name)}" ${ro}></div>
+    ${missing.length && !state.readOnly ? `<button class="carry" data-action="routines" data-person="${person}">Add ${missing.length} daily routine${missing.length > 1 ? "s" : ""}</button>` : ""}
     ${carry.length && !state.readOnly ? `<button class="carry" data-action="carry" data-person="${person}">Bring over ${carry.length} unfinished from yesterday 🆙</button>` : ""}
   </section>`;
 }
@@ -398,6 +407,14 @@ app.addEventListener("click", e => {
   else if (action === "note") {
     state.openNotes[id] = true; render();
     const n = app.querySelector('[data-key="note-' + id + '"]'); if (n) n.focus();
+    return;
+  }
+  else if (action === "routines") {
+    mutate(person, state.date, d => {
+      const have = new Set(d.tasks.map(t => t.text.trim().toLowerCase()));
+      const add = (state.settings.recurring[person] || []).filter(r => !have.has(r.trim().toLowerCase())).map(newTask);
+      d.tasks = add.concat(d.tasks); // routines go to the top, like on a fresh day
+    });
     return;
   }
   else if (action === "carry") {
