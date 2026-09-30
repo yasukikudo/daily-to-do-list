@@ -95,6 +95,8 @@ function rebuild() {
     saveProfile({ slot, name: (L.names && L.names[slot]) || "", recurring: (L.recurring && L.recurring[slot]) || [] });
   }
 }
+  };
+}
 
 /* ---------- saving (one write at a time per document) ---------- */
 const pending = {}, inflight = {};
@@ -346,9 +348,7 @@ function columnHTML(person) {
   const tasks = day ? day.tasks : [];
   const done = tasks.filter(isDone).length;
   const carry = carryCandidates(person);
-  const mine = mySlot() === person;
-  // routine controls only in your own column
-  const missing = mine ? missingRoutines(person) : [];
+  const missing = missingRoutines(person);
   const ro = state.readOnly ? "disabled" : "";
   const routines = state.settings.recurring[person] || [];
 
@@ -371,9 +371,9 @@ function columnHTML(person) {
       </div>
     </li>`;
   }).join("") + "</ul>"
-    : `<div class="empty">Nothing planned yet.${mine && routines.length ? " Adding a task starts the day with these routines:" : ""}</div>
-       ${mine && routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
-       ${mine ? `<button class="linkbtn routinebtn" data-action="settings">${routines.length ? "Edit daily routines" : "Set daily routines"}</button>` : ""}`;
+    : `<div class="empty">Nothing planned yet.${routines.length ? " Adding a task starts the day with these routines:" : ""}</div>
+       ${routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+       <button class="linkbtn routinebtn" data-action="settings">${routines.length ? "Edit daily routines" : "Set daily routines"}</button>`;
 
   return `<section class="col ${person}" aria-label="${esc(name)}">
     <div class="colhead"><span class="name">${esc(name)}</span><span class="count">${tasks.length ? done + " of " + tasks.length + " done" : ""}</span></div>
@@ -435,7 +435,6 @@ app.addEventListener("click", e => {
     return;
   }
   else if (action === "routines") {
-    if (person !== mySlot()) return;
     mutate(person, state.date, d => {
       const have = new Set(d.tasks.map(t => t.text.trim().toLowerCase()));
       const add = (state.settings.recurring[person] || []).filter(r => !have.has(r.trim().toLowerCase())).map(newTask);
