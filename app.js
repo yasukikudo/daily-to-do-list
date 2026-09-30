@@ -95,8 +95,6 @@ function rebuild() {
     saveProfile({ slot, name: (L.names && L.names[slot]) || "", recurring: (L.recurring && L.recurring[slot]) || [] });
   }
 }
-  };
-}
 
 /* ---------- saving (one write at a time per document) ---------- */
 const pending = {}, inflight = {};
@@ -125,7 +123,7 @@ function saveProfile(p) {
 }
 
 function mutate(person, date, fn) {
-  if (state.readOnly) return;
+  if (state.readOnly || person !== mySlot()) return; // you can only change your own list
   const existing = getDay(person, date);
   const d = existing ? structuredClone(existing)
     : { date, person, comment: "", tasks: (state.settings.recurring[person] || []).map(newTask) };
@@ -348,40 +346,43 @@ function columnHTML(person) {
   const tasks = day ? day.tasks : [];
   const done = tasks.filter(isDone).length;
   const carry = carryCandidates(person);
-  const missing = missingRoutines(person);
-  const ro = state.readOnly ? "disabled" : "";
+  const mine = mySlot() === person;
+  // routine controls only in your own column
+  const missing = mine ? missingRoutines(person) : [];
+  const edit = mine && !state.readOnly; // the other person's column is view-only
+  const ro = edit ? "" : "disabled";
   const routines = state.settings.recurring[person] || [];
 
   const list = tasks.length ? '<ul class="tasks">' + tasks.map(t => {
     const st = statusOf(t.status);
-    const showNote = t.note || state.openNotes[t.id];
+    const showNote = t.note || (edit && state.openNotes[t.id]);
     return `<li class="task ${isDone(t) ? "done" : ""}">
       <button class="stamp ${st.key ? "set" : ""}" data-action="status" data-person="${person}" data-id="${t.id}" data-stamp="${t.id}"
         aria-label="Status: ${st.label}. Tap to change." title="${st.label}" ${ro}>${stampOf(t)}</button>
       <div class="body">
         <input class="text" data-field="text" data-person="${person}" data-id="${t.id}" data-key="text-${t.id}" value="${esc(t.text)}" aria-label="Task" ${ro}>
-        ${state.openPicker === t.id ? `<div class="picker" role="group" aria-label="Pick a stamp">${STICKERS.map(em =>
+        ${edit && state.openPicker === t.id ? `<div class="picker" role="group" aria-label="Pick a stamp">${STICKERS.map(em =>
           `<button data-action="sticker" data-person="${person}" data-id="${t.id}" data-emoji="${em}" aria-label="Stamp ${em}">${em}</button>`).join("")}</div>` : ""}
         ${showNote ? `<input class="note" data-field="note" data-person="${person}" data-id="${t.id}" data-key="note-${t.id}" value="${esc(t.note)}" placeholder="Add a note" aria-label="Note" ${ro}>` : ""}
       </div>
-      <div class="tools">
+      ${edit ? `<div class="tools">
         <button class="tool" data-action="picker" data-id="${t.id}" aria-label="Pick a stamp" title="Pick a stamp" ${ro}>♡</button>
         ${showNote ? "" : `<button class="tool" data-action="note" data-id="${t.id}" aria-label="Add note" title="Add note" ${ro}>✎</button>`}
-        <button class="tool" data-action="delete" data-person="${person}" data-id="${t.id}" aria-label="Delete task" title="Delete" ${ro}>✕</button>
-      </div>
+        <button class="tool" data-action="delete" data-person="${person}" data-id="${t.id}" aria-label="Delete task" title="Delete">✕</button>
+      </div>` : ""}
     </li>`;
   }).join("") + "</ul>"
-    : `<div class="empty">Nothing planned yet.${routines.length ? " Adding a task starts the day with these routines:" : ""}</div>
-       ${routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
-       <button class="linkbtn routinebtn" data-action="settings">${routines.length ? "Edit daily routines" : "Set daily routines"}</button>`;
+    : `<div class="empty">Nothing planned yet.${mine && routines.length ? " Adding a task starts the day with these routines:" : ""}</div>
+       ${mine && routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
+       ${mine ? `<button class="linkbtn routinebtn" data-action="settings">${routines.length ? "Edit daily routines" : "Set daily routines"}</button>` : ""}`;
 
   return `<section class="col ${person}" aria-label="${esc(name)}">
     <div class="colhead"><span class="name">${esc(name)}</span><span class="count">${tasks.length ? done + " of " + tasks.length + " done" : ""}</span></div>
-    <input class="comment" data-field="comment" data-person="${person}" data-key="comment-${person}" value="${esc(day ? day.comment : "")}" placeholder="A line about the day" aria-label="Comment for the day" ${ro}>
+    ${edit || (day && day.comment) ? `<input class="comment" data-field="comment" data-person="${person}" data-key="comment-${person}" value="${esc(day ? day.comment : "")}" placeholder="A line about the day" aria-label="Comment for the day" ${ro}>` : '<div class="comment-gap"></div>'}
     ${list}
-    <div class="add"><span aria-hidden="true">+</span><input data-add="${person}" data-key="add-${person}" placeholder="Add a task" aria-label="Add a task for ${esc(name)}" ${ro}></div>
-    ${missing.length && !state.readOnly ? `<button class="carry" data-action="routines" data-person="${person}">Add ${missing.length} daily routine${missing.length > 1 ? "s" : ""}</button>` : ""}
-    ${carry.length && !state.readOnly ? `<button class="carry" data-action="carry" data-person="${person}">Bring over ${carry.length} unfinished from yesterday 🆙</button>` : ""}
+    ${edit ? `<div class="add"><span aria-hidden="true">+</span><input data-add="${person}" data-key="add-${person}" placeholder="Add a task" aria-label="Add a task for ${esc(name)}"></div>` : ""}
+    ${missing.length && edit ? `<button class="carry" data-action="routines" data-person="${person}">Add ${missing.length} daily routine${missing.length > 1 ? "s" : ""}</button>` : ""}
+    ${carry.length && edit ? `<button class="carry" data-action="carry" data-person="${person}">Bring over ${carry.length} unfinished from yesterday 🆙</button>` : ""}
   </section>`;
 }
 
@@ -435,6 +436,7 @@ app.addEventListener("click", e => {
     return;
   }
   else if (action === "routines") {
+    if (person !== mySlot()) return;
     mutate(person, state.date, d => {
       const have = new Set(d.tasks.map(t => t.text.trim().toLowerCase()));
       const add = (state.settings.recurring[person] || []).filter(r => !have.has(r.trim().toLowerCase())).map(newTask);
