@@ -95,8 +95,6 @@ function rebuild() {
     saveProfile({ slot, name: (L.names && L.names[slot]) || "", recurring: (L.recurring && L.recurring[slot]) || [] });
   }
 }
-  };
-}
 
 /* ---------- saving (one write at a time per document) ---------- */
 const pending = {}, inflight = {};
