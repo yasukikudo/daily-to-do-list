@@ -11,7 +11,8 @@ const auth = getAuth(fb);
 const db = getFirestore(fb);
 const persistenceReady = setPersistence(auth, ASK_PIN_EVERY_TIME ? browserSessionPersistence : browserLocalPersistence);
 
-// Two columns. Who owns which column, their names and routines live in Firestore (private), not in this code.
+// Two columns. Each person's name, column and routines live in their own Firestore document
+// (profiles/{uid}), which only that person can change (enforced by the Firestore rules).
 const PEOPLE = ["pa", "pb"];
 const EMPTY_SETTINGS = { names: { pa: "", pb: "" }, recurring: { pa: [], pb: [] }, members: {} };
 
@@ -36,6 +37,7 @@ function saveEmail(v) { try { v ? localStorage.setItem("email", v) : localStorag
 
 const state = {
   user: undefined, days: {}, settings: EMPTY_SETTINGS, settingsLoaded: false, date: todayStr(),
+  profiles: {}, legacy: null, profilesLoaded: false, legacyLoaded: false, migrated: false,
   readOnly: false, openNotes: {}, openPicker: null, popId: null, banner: "",
   pendingEmail: "", pin: "", pinErr: "", busy: false,
   calMonth: todayStr().slice(0, 7), calOpen: false
@@ -66,12 +68,33 @@ function getDay(person, date) { return state.days[dayId(person, date)]; }
 function nameOf(p) { return state.settings.names[p] || (p === "pa" ? "Left" : "Right"); }
 function mySlot() { return state.user ? state.settings.members[state.user.uid] : undefined; }
 function ownerOf(p) { return Object.keys(state.settings.members).find(u => state.settings.members[u] === p); }
-function mergeSettings(s) {
-  s = s || {};
-  return {
-    names: { ...EMPTY_SETTINGS.names, ...s.names },
-    recurring: { ...EMPTY_SETTINGS.recurring, ...s.recurring },
-    members: { ...s.members }
+function myProfile() { return state.user ? state.profiles[state.user.uid] : undefined; }
+// Combine everyone's profile into one view (the old shared settings/main is only a fallback)
+function rebuild() {
+  const out = { names: { pa: "", pb: "" }, recurring: { pa: [], pb: [] }, members: {} };
+  const claimed = new Set(Object.values(state.profiles).map(p => p.slot));
+  const L = state.legacy;
+  if (L) PEOPLE.forEach(p => {
+    if (claimed.has(p)) return;
+    if (L.names && L.names[p]) out.names[p] = L.names[p];
+    if (L.recurring && L.recurring[p]) out.recurring[p] = L.recurring[p];
+    Object.entries(L.members || {}).forEach(([u, sl]) => { if (sl === p && !state.profiles[u]) out.members[u] = p; });
+  });
+  Object.entries(state.profiles).forEach(([u, p]) => {
+    if (!PEOPLE.includes(p.slot)) return;
+    out.members[u] = p.slot;
+    out.names[p.slot] = p.name || "";
+    out.recurring[p.slot] = Array.isArray(p.recurring) ? p.recurring : [];
+  });
+  state.settings = out;
+  state.settingsLoaded = state.profilesLoaded && state.legacyLoaded;
+  // one-time move of this person's entry from the old shared settings into their own profile
+  if (state.settingsLoaded && !state.migrated && !myProfile() && L && L.members && L.members[state.user.uid]) {
+    state.migrated = true;
+    const slot = L.members[state.user.uid];
+    saveProfile({ slot, name: (L.names && L.names[slot]) || "", recurring: (L.recurring && L.recurring[slot]) || [] });
+  }
+}
   };
 }
 
@@ -94,7 +117,12 @@ async function flush(path) {
   }
   inflight[path] = false;
 }
-function saveSettings(next) { state.settings = next; render(); persist("settings/main", next); }
+function saveProfile(p) {
+  const path = "profiles/" + state.user.uid;
+  state.profiles = { ...state.profiles, [state.user.uid]: p };
+  rebuild(); render();
+  persist(path, p);
+}
 
 function mutate(person, date, fn) {
   if (state.readOnly) return;
@@ -222,11 +250,8 @@ function renderJoin() {
     const name = document.getElementById("joinName").value.trim();
     const slot = state.joinSlot || PEOPLE.find(p => !ownerOf(p));
     if (!name || !slot) return;
-    const next = mergeSettings(state.settings);
-    next.names[slot] = name;
-    next.members[state.user.uid] = slot;
     state.joinSlot = null;
-    saveSettings(next);
+    saveProfile({ slot, name, recurring: [] });
   });
 }
 
@@ -248,7 +273,7 @@ function headerHTML() {
       <button class="pill" data-action="today">Today</button>
       <button class="pill" data-action="tomorrow">Plan tomorrow</button>
       <button class="iconbtn" data-action="next" aria-label="Next day">›</button>
-      <button class="iconbtn" data-action="settings" aria-label="Names, routines, PIN and sign out">⚙</button>
+      <button class="iconbtn" data-action="settings" aria-label="My settings, PIN and sign out">⚙</button>
     </div>
   </header>`;
 }
@@ -468,16 +493,14 @@ document.addEventListener("keydown", e => {
 /* ---------- settings ---------- */
 const dlg = document.getElementById("settings");
 function openSettings() {
-  const s = state.settings;
+  const me = mySlot();
   dlg.innerHTML = `<form class="dlg" method="dialog">
-    <h2>Names and daily routines</h2>
-    <p>Daily routines are added to a new day automatically when its first task is added. Write one per line.</p>
-    <div class="fgrid">
-      ${PEOPLE.map(p => `<div>
-        <label for="n-${p}">Name${mySlot() === p ? " (you)" : ""}</label><input id="n-${p}" value="${esc(s.names[p])}" maxlength="30">
-        <label for="r-${p}" style="margin-top:12px">Daily routines</label><textarea id="r-${p}">${esc((s.recurring[p] || []).join("\n"))}</textarea>
-      </div>`).join("")}
-    </div>
+    <h2>My settings</h2>
+    ${me ? `<p>Only you can change these. Daily routines are added to a new day automatically when its first task is added. Write one per line.</p>
+    <div class="mine">
+      <label for="myName">My name</label><input id="myName" value="${esc(state.settings.names[me])}" maxlength="30">
+      <label for="myRoutines" style="margin-top:12px">My daily routines</label><textarea id="myRoutines">${esc((state.settings.recurring[me] || []).join("\n"))}</textarea>
+    </div>` : ""}
     <div class="pinset">
       <h3>Change my PIN</h3>
       <div class="pinrow">
@@ -498,12 +521,12 @@ dlg.addEventListener("close", () => {
   if (dlg.returnValue === "signout") { signOut(auth); return; }
   if (dlg.returnValue === "pin") { changePin(dlg.querySelector("#pin1").value, dlg.querySelector("#pin2").value); return; }
   if (dlg.returnValue !== "save") return;
-  const next = mergeSettings(state.settings);
-  PEOPLE.forEach(p => {
-    next.names[p] = dlg.querySelector("#n-" + p).value.trim();
-    next.recurring[p] = dlg.querySelector("#r-" + p).value.split("\n").map(x => x.trim()).filter(Boolean);
+  const me = mySlot(); if (!me) return;
+  saveProfile({
+    slot: me,
+    name: dlg.querySelector("#myName").value.trim(),
+    recurring: dlg.querySelector("#myRoutines").value.split("\n").map(x => x.trim()).filter(Boolean)
   });
-  saveSettings(next);
 });
 
 async function changePin(a, b) {
@@ -525,7 +548,8 @@ async function changePin(a, b) {
 /* ---------- start ---------- */
 onAuthStateChanged(auth, user => {
   unsubs.forEach(u => u()); unsubs = [];
-  Object.assign(state, { user, days: {}, settings: EMPTY_SETTINGS, settingsLoaded: false, readOnly: false, banner: "", pin: "", pinErr: "" });
+  Object.assign(state, { user, days: {}, settings: EMPTY_SETTINGS, settingsLoaded: false, readOnly: false, banner: "", pin: "", pinErr: "",
+    profiles: {}, legacy: null, profilesLoaded: false, legacyLoaded: false, migrated: false });
   render();
   if (!user) return;
   unsubs.push(onSnapshot(collection(db, "days"), snap => {
@@ -538,12 +562,18 @@ onAuthStateChanged(auth, user => {
     state.readOnly = err.code === "permission-denied";
     state.banner = state.readOnly ? "This account cannot open the list. Ask the owner to add your email to the Firestore rules."
       : "Live updates stopped. Reload the page to reconnect.";
-    state.settingsLoaded = true; render();
+    state.profilesLoaded = state.legacyLoaded = true; rebuild(); render();
   }));
-  unsubs.push(onSnapshot(doc(db, "settings/main"), s => {
-    if (!pending["settings/main"] && !inflight["settings/main"]) state.settings = mergeSettings(s.exists() ? s.data() : null);
-    state.settingsLoaded = true; render();
-  }, () => { state.settingsLoaded = true; render(); }));
+  unsubs.push(onSnapshot(collection(db, "profiles"), snap => {
+    const next = {};
+    snap.forEach(d => { next[d.id] = d.data(); });
+    const mine = "profiles/" + user.uid;
+    if ((pending[mine] || inflight[mine]) && state.profiles[user.uid]) next[user.uid] = state.profiles[user.uid];
+    state.profiles = next; state.profilesLoaded = true; rebuild(); render();
+  }, () => { state.profilesLoaded = true; rebuild(); render(); }));
+  unsubs.push(onSnapshot(doc(db, "settings/main"), d => {
+    state.legacy = d.exists() ? d.data() : null; state.legacyLoaded = true; rebuild(); render();
+  }, () => { state.legacyLoaded = true; rebuild(); render(); }));
 });
 
 // Re-render when the app comes back to the foreground (keeps "Today" correct after midnight)
