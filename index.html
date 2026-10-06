@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Our Daily List</title>
+<meta name="theme-color" content="#F1F4F8">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icon-192.png">
+<link rel="apple-touch-icon" href="icon-192.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,300..800&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="style.css?v=9">
+</head>
+<body>
+<div class="wrap" id="app"></div>
+<dialog id="settings"></dialog>
+<script>
+/* show load and runtime errors on screen (no devtools on phones) */
+(function () {
+  function show(msg) {
+    var box = document.getElementById("err");
+    if (!box) {
+      box = document.createElement("pre");
+      box.id = "err";
+      box.style.cssText = "position:fixed;top:8px;left:8px;right:8px;z-index:9999;margin:0;padding:10px 12px;max-height:40vh;overflow:auto;white-space:pre-wrap;font:12px/1.4 ui-monospace,Menlo,monospace;color:#7a0b0b;background:#fff0f0;border:2px solid #d11;border-radius:8px";
+      document.body.appendChild(box);
+    }
+    box.textContent += (box.textContent ? "\n" : "") + msg;
+  }
+  window.addEventListener("error", function (e) {
+    var t = e.target;
+    /* only scripts matter; the app still works without styles and fonts.
+       a failed import inside app.js (config.js, Firebase SDK) also lands on app.js's script tag */
+    if (t && t !== window) { if (t.tagName === "SCRIPT") show("Failed to load " + t.src + " or one of its imports"); }
+    else show((e.message || "Error") + (e.filename ? " (" + e.filename.split("/").pop() + ":" + e.lineno + ")" : ""));
+  }, true);
+  window.addEventListener("unhandledrejection", function (e) {
+    var r = e.reason;
+    show("Unhandled: " + (r && (r.stack || r.message) || r));
+  });
+})();
+</script>
+<script type="module" src="app.js?v=9"></script>
+</body>
+</html>
