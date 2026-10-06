@@ -219,7 +219,8 @@ dialog::backdrop { background: rgba(10, 14, 22, .45); }
 .datebtn { display: flex; align-items: flex-end; gap: 16px; border: none; background: none; padding: 0; text-align: left; cursor: default; }
 .datebtn .dateinfo, .datebtn .rel, .datebtn .weekday, .datebtn .month { display: block; }
 .chev { display: none; font-size: 13px; }
-.date { position: relative; }
+/* view-transition-name makes the header parts stacking contexts, so lift the date (and its calendar popover) above them */
+.date { position: relative; z-index: 30; }
 .cal { font-size: 13px; }
 .calhead { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; font-weight: 600; font-size: 15px; }
 .calnav { border: none; background: none; width: 30px; height: 30px; border-radius: 8px; font-size: 18px; color: var(--muted); }

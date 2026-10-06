@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, updat
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, onSnapshot, setDoc }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=11";
+import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=12";
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
@@ -184,7 +184,9 @@ window.addEventListener("resize", () => {
   fitQueued = true;
   requestAnimationFrame(() => { fitQueued = false; fitTexts(); });
 });
+// the web font arrives after the first render and changes how names wrap
 document.fonts.ready.then(fitTexts);
+document.fonts.addEventListener("loadingdone", fitTexts);
 
 /* sign in: email once per device, then PIN */
 function renderLogin() {
