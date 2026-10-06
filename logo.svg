@@ -1,0 +1,23 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <title>Our Daily List</title>
+  <defs>
+    <!-- the right pillar's last dot is a see-through hole (it lets the background show) -->
+    <mask id="hole">
+      <rect width="512" height="512" fill="#FFFFFF"/>
+      <circle cx="342.58" cy="327.8" r="21.33" fill="#000000"/>
+    </mask>
+  </defs>
+  <g mask="url(#hole)">
+    <rect width="512" height="512" rx="112.5" fill="#F1F4F8"/>
+    <rect x="102.29" y="122.78" width="133.16" height="266.67" rx="37" fill="#3346C8"/>
+    <rect x="275.95" y="122.78" width="133.27" height="266.67" rx="37" fill="#0E8F74"/>
+    <g fill="#FFFFFF">
+      <circle cx="168.87" cy="184.2" r="21.33"/>
+      <circle cx="168.87" cy="256" r="21.33"/>
+      <circle cx="168.87" cy="327.8" r="21.33"/>
+      <circle cx="342.58" cy="184.2" r="21.33"/>
+      <circle cx="342.58" cy="256" r="21.33"/>
+    </g>
+  </g>
+  <circle cx="342.58" cy="327.8" r="21.33" fill="#FFFFFF" fill-opacity="0.431"/>
+</svg>

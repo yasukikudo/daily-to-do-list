@@ -1,6 +1,8 @@
-# Our Daily List
-
-A shared daily to-do list, readable on a phone or a desktop.
+<p align="center">
+  <img src="logo.svg" width="96" height="96" alt="Our Daily List logo: two rounded pillars, indigo and jade, each with three dots">
+</p>
+<h1 align="center">Our Daily List</h1>
+<p align="center">A shared daily to-do list, readable on a phone or a desktop.</p>
 
 <p align="center">
   <img src="screenshots/hero.webp" alt="Our Daily List on a desktop in dark mode with the shared lists side by side, and on phones: your own list, and the emoji stamp picker" width="860">
