@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, updat
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, onSnapshot, setDoc }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=9";
+import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=10";
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
@@ -40,7 +40,7 @@ const state = {
   profiles: {}, legacy: null, profilesLoaded: false, legacyLoaded: false, migrated: false,
   readOnly: false, openNotes: {}, openPicker: null, popId: null, banner: "",
   pendingEmail: "", pin: "", pinErr: "", busy: false,
-  calMonth: todayStr().slice(0, 7), calOpen: false
+  calMonth: todayStr().slice(0, 7), calOpen: false, viewFrom: null
 };
 let unsubs = [];
 
@@ -69,6 +69,9 @@ function nameOf(p) { return state.settings.names[p] || (p === "pa" ? "Left" : "R
 function mySlot() { return state.user ? state.settings.members[state.user.uid] : undefined; }
 function ownerOf(p) { return Object.keys(state.settings.members).find(u => state.settings.members[u] === p); }
 function myProfile() { return state.user ? state.profiles[state.user.uid] : undefined; }
+// "both" shows both lists; "me" shows only your own. Saved in profiles/{uid}.view; missing means "both"
+function viewOf() { return mySlot() && myProfile() && myProfile().view === "me" ? "me" : "both"; }
+function shown() { return viewOf() === "me" ? [mySlot()] : PEOPLE; }
 // Combine everyone's profile into one view (the old shared settings/main is only a fallback)
 function rebuild() {
   const out = { names: { pa: "", pb: "" }, recurring: { pa: [], pb: [] }, members: {} };
@@ -115,6 +118,11 @@ async function flush(path) {
   }
   inflight[path] = false;
 }
+// Change some fields of your own profile and keep the rest (name, routines, view, ...)
+function updateMyProfile(changes) {
+  const me = mySlot(); if (!me) return;
+  saveProfile({ slot: me, name: state.settings.names[me] || "", recurring: state.settings.recurring[me] || [], ...myProfile(), ...changes });
+}
 function saveProfile(p) {
   const path = "profiles/" + state.user.uid;
   state.profiles = { ...state.profiles, [state.user.uid]: p };
@@ -148,10 +156,12 @@ function render() {
   const keep = a && a.dataset && a.dataset.key && app.contains(a)
     ? { key: a.dataset.key, value: a.value, s: a.selectionStart, e: a.selectionEnd } : null;
 
-  app.innerHTML = `<div class="layout"><aside class="side" aria-label="Calendar">${calHTML()}</aside><div class="main">` +
+  const solo = viewOf() === "me" ? " solo" : "";
+  app.innerHTML = `<div class="layout${solo}"><aside class="side" aria-label="Calendar">${calHTML()}</aside><div class="main">` +
     headerHTML() + weekHTML() +
     (state.banner ? `<div class="banner" role="status">${esc(state.banner)}</div>` : "") +
-    '<div class="cols">' + PEOPLE.map(columnHTML).join("") + "</div>" + legendHTML() + "</div></div>";
+    `<div class="cols${solo}">` + shown().map(columnHTML).join("") + "</div>" + legendHTML() + "</div></div>";
+  state.viewFrom = null;
 
   if (keep) {
     const el = app.querySelector('[data-key="' + CSS.escape(keep.key) + '"]');
@@ -266,14 +276,46 @@ function headerHTML() {
       </button>
       ${state.calOpen ? `<div class="calpop">${calHTML()}</div>` : ""}
     </div>
-    <div class="controls">
-      <button class="iconbtn" data-action="prev" aria-label="Previous day">‹</button>
-      <button class="pill" data-action="today">Today</button>
-      <button class="pill" data-action="tomorrow">Plan tomorrow</button>
-      <button class="iconbtn" data-action="next" aria-label="Next day">›</button>
-      <button class="iconbtn" data-action="settings" aria-label="My settings, PIN and sign out">⚙</button>
+    <div class="topright">
+      ${viewSwitchHTML()}
+      <div class="controls">
+        <button class="iconbtn" data-action="prev" aria-label="Previous day">‹</button>
+        <button class="pill" data-action="today">Today</button>
+        <button class="pill" data-action="tomorrow">Plan tomorrow</button>
+        <button class="iconbtn" data-action="next" aria-label="Next day">›</button>
+        <button class="iconbtn" data-action="settings" aria-label="My settings, PIN and sign out">⚙</button>
+      </div>
     </div>
   </header>`;
+}
+
+// Both / Me switch. Only for people who have a column and can save their profile.
+function viewSwitchHTML() {
+  const me = mySlot();
+  if (!me || state.readOnly) return "";
+  const v = viewOf();
+  const from = state.viewFrom ? " from-" + state.viewFrom : ""; // slide the thumb in from the old side
+  return `<div class="viewseg ${me} ${v}${from}" role="group" aria-label="Show lists">
+    <span class="thumb" aria-hidden="true"></span>
+    <button data-action="view" data-view="both" aria-pressed="${v === "both"}">Both</button>
+    <button data-action="view" data-view="me" aria-pressed="${v === "me"}">Me</button>
+  </div>`;
+}
+
+function setView(v) {
+  if (!mySlot() || state.readOnly || v === viewOf()) return;
+  state.viewFrom = viewOf();
+  const change = () => updateMyProfile({ view: v });
+  // View Transitions move the lists, calendar and header between their old and new places
+  if (document.startViewTransition && !matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    const vt = document.startViewTransition(change);
+    vt.updateCallbackDone.then(() => focusView(v));
+  } else { change(); focusView(v); }
+}
+// The switch is redrawn, so keep keyboard focus on it
+function focusView(v) {
+  const b = app.querySelector('[data-view="' + v + '"]');
+  if (b && document.activeElement === document.body) b.focus({ preventScroll: true });
 }
 
 function ratio(person, date) {
@@ -292,7 +334,7 @@ function calHTML() {
   for (let i = 0; i < lead; i++) cells += "<span></span>";
   for (let n = 1; n <= count; n++) {
     const ds = state.calMonth + "-" + pad(n);
-    const dots = PEOPLE.map(p => {
+    const dots = shown().map(p => {
       const d = getDay(p, ds);
       if (!d || !d.tasks.length) return '<i class="none"></i>';
       return `<i class="${p}" style="opacity:${Math.max(0.3, ratio(p, ds)).toFixed(2)}"></i>`;
@@ -313,14 +355,14 @@ function calHTML() {
 
 function weekHTML() {
   const t = todayStr();
-  return '<nav class="week" aria-label="This week">' + weekOf(state.date).map(ds => {
+  return '<nav class="week" aria-label="This week">' + weekOf(state.date).map((ds, i) => {
     const d = parse(ds);
-    const a = Math.round(ratio("pa", ds) * 100), b = Math.round(ratio("pb", ds) * 100);
-    return `<button class="wd ${ds === state.date ? "sel" : ""} ${ds === t ? "today" : ""}" data-date="${ds}"
-      aria-label="${d.toDateString()}, ${esc(nameOf("pa"))} ${a}% done, ${esc(nameOf("pb"))} ${b}% done">
+    const pct = shown().map(p => [p, Math.round(ratio(p, ds) * 100)]);
+    return `<button class="wd ${ds === state.date ? "sel" : ""} ${ds === t ? "today" : ""}" data-date="${ds}" style="view-transition-name: vt-wd-${i}"
+      aria-label="${d.toDateString()}, ${pct.map(([p, n]) => esc(nameOf(p)) + " " + n + "% done").join(", ")}">
       <span class="l">${d.toLocaleDateString("en-US", { weekday: "short" })}</span>
       <span class="n">${d.getDate()}</span>
-      <span class="bars"><span class="bar pa"><i style="height:${a}%"></i></span><span class="bar pb"><i style="height:${b}%"></i></span></span>
+      <span class="bars">${pct.map(([p, n]) => `<span class="bar ${p}"><i style="height:${n}%"></i></span>`).join("")}</span>
     </button>`;
   }).join("") + "</nav>";
 }
@@ -376,7 +418,9 @@ function columnHTML(person) {
        ${mine && routines.length ? `<ul class="ghost">${routines.map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : ""}
        ${mine ? `<button class="linkbtn routinebtn" data-action="settings">${routines.length ? "Edit daily routines" : "Set daily routines"}</button>` : ""}`;
 
-  return `<section class="col ${person}" aria-label="${esc(name)}">
+  // names for the Both / Me animation: your list moves and resizes, the other one fades
+  const vt = mySlot() ? ` style="view-transition-name: vt-col-${mine ? "mine" : "other"}"` : "";
+  return `<section class="col ${person}" aria-label="${esc(name)}"${vt}>
     <div class="colhead"><span class="name">${esc(name)}</span><span class="count">${tasks.length ? done + " of " + tasks.length + " done" : ""}</span></div>
     ${edit || (day && day.comment) ? `<input class="comment" data-field="comment" data-person="${person}" data-key="comment-${person}" value="${esc(day ? day.comment : "")}" placeholder="A line about the day" aria-label="Comment for the day" ${ro}>` : '<div class="comment-gap"></div>'}
     ${list}
@@ -413,6 +457,7 @@ app.addEventListener("click", e => {
   else if (action === "today") setDate(todayStr());
   else if (action === "tomorrow") setDate(addDays(todayStr(), 1));
   else if (action === "settings") { openSettings(); return; }
+  else if (action === "view") { setView(b.dataset.view); return; }
   else if (action === "status") {
     state.popId = id;
     mutate(person, state.date, d => {
@@ -523,9 +568,7 @@ dlg.addEventListener("close", () => {
   if (dlg.returnValue === "signout") { signOut(auth); return; }
   if (dlg.returnValue === "pin") { changePin(dlg.querySelector("#pin1").value, dlg.querySelector("#pin2").value); return; }
   if (dlg.returnValue !== "save") return;
-  const me = mySlot(); if (!me) return;
-  saveProfile({
-    slot: me,
+  updateMyProfile({
     name: dlg.querySelector("#myName").value.trim(),
     recurring: dlg.querySelector("#myRoutines").value.split("\n").map(x => x.trim()).filter(Boolean)
   });
