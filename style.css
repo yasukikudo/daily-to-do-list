@@ -102,15 +102,16 @@ button { cursor: pointer; }
 @keyframes pop { 0% { transform: scale(.7); } 60% { transform: scale(1.12); } 100% { transform: scale(1); } }
 .body { min-width: 0; }
 .text {
-  width: 100%; border: none; background: none; padding: 9px 0 3px; font-size: 15.5px; line-height: 1.35;
-  border-radius: 4px; outline: none;
+  display: block; width: 100%; border: none; background: none; padding: 9px 0 3px; font-size: 15.5px; line-height: 1.35;
+  border-radius: 4px; outline: none; resize: none; overflow: hidden; overflow-wrap: anywhere;
 }
+.text:not(:focus) { max-height: calc(2.7em + 12px); } /* up to 2 lines; the whole name while editing */
 .task.done .text { color: var(--muted); }
 .note { width: 100%; border: none; background: none; padding: 0 0 8px; font-size: 13px; color: var(--muted); outline: none; }
 .note::placeholder { color: var(--faint); }
 .tools { display: flex; gap: 0; opacity: .0; padding-top: 6px; transition: opacity .15s; }
 .task:hover .tools, .task:focus-within .tools { opacity: 1; }
-@media (hover: none) { .tools { opacity: .6; } }
+
 .tool { border: none; background: none; width: 32px; height: 32px; border-radius: 8px; color: var(--muted); font-size: 15px; }
 .tool:hover { background: var(--bg); color: var(--ink); }
 
@@ -249,7 +250,7 @@ dialog::backdrop { background: rgba(10, 14, 22, .45); }
 .mine input, .mine textarea { width: 100%; border: 1px solid var(--line); background: var(--bg); border-radius: 10px; padding: 8px 10px; font-size: 15px; }
 .mine textarea { min-height: 120px; resize: vertical; }
 /* View-only (the other person's column) */
-.col input:disabled { color: inherit; -webkit-text-fill-color: currentColor; opacity: 1; cursor: default; }
+.col input:disabled, .col textarea:disabled { color: inherit; -webkit-text-fill-color: currentColor; opacity: 1; cursor: default; }
 .task.done .text:disabled { color: var(--muted); -webkit-text-fill-color: var(--muted); }
 .comment:disabled { color: var(--muted); -webkit-text-fill-color: var(--muted); }
 .stamp:disabled { cursor: default; }
@@ -331,3 +332,14 @@ dialog::backdrop { background: rgba(10, 14, 22, .45); }
 /* the switch animates itself (live), so skip the crossfade of its snapshot */
 ::view-transition-old(vt-seg) { animation: none; opacity: 0; }
 ::view-transition-new(vt-seg) { animation: none; }
+
+/* Touch screens: names use the full width; a tapped task shows ♡ ✎ ✕ on a row under its name */
+@media (hover: none) {
+  .task { grid-template-columns: 44px 1fr; }
+  .tools { display: none; }
+  .task.active .tools { display: flex; grid-column: 2 / -1; justify-content: flex-end; gap: 4px; opacity: 1; padding: 0 0 4px; }
+  .task.active .tool { width: 40px; height: 40px; font-size: 17px; }
+  /* disabled parts of the other person's list swallow taps; let them reach the row so your ♡ ✎ ✕ hide */
+  .col :is(button, input, textarea):disabled { pointer-events: none; }
+}
+@media (hover: none) and (min-width: 721px) { .solo .task { grid-template-columns: 48px 1fr; } }

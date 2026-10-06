@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, updat
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, onSnapshot, setDoc }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=10";
+import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=11";
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
@@ -40,7 +40,7 @@ const state = {
   profiles: {}, legacy: null, profilesLoaded: false, legacyLoaded: false, migrated: false,
   readOnly: false, openNotes: {}, openPicker: null, popId: null, banner: "",
   pendingEmail: "", pin: "", pinErr: "", busy: false,
-  calMonth: todayStr().slice(0, 7), calOpen: false, viewFrom: null
+  calMonth: todayStr().slice(0, 7), calOpen: false, viewFrom: null, activeTask: null
 };
 let unsubs = [];
 
@@ -167,12 +167,24 @@ function render() {
     const el = app.querySelector('[data-key="' + CSS.escape(keep.key) + '"]');
     if (el) { el.value = keep.value; el.focus(); try { el.setSelectionRange(keep.s, keep.e); } catch (_) {} }
   }
+  fitTexts();
   if (state.popId) {
     const s = app.querySelector('[data-stamp="' + state.popId + '"]');
     if (s) s.classList.add("pop");
     state.popId = null;
   }
 }
+
+// Task names are textareas so long names wrap; size each one to its text (CSS shows 2 lines unless editing)
+function fit(el) { el.style.height = "auto"; el.style.height = el.scrollHeight + "px"; }
+function fitTexts() { app.querySelectorAll("textarea.text").forEach(fit); }
+let fitQueued = false;
+window.addEventListener("resize", () => {
+  if (fitQueued) return;
+  fitQueued = true;
+  requestAnimationFrame(() => { fitQueued = false; fitTexts(); });
+});
+document.fonts.ready.then(fitTexts);
 
 /* sign in: email once per device, then PIN */
 function renderLogin() {
@@ -398,11 +410,11 @@ function columnHTML(person) {
   const list = tasks.length ? '<ul class="tasks">' + tasks.map(t => {
     const st = statusOf(t.status);
     const showNote = t.note || (edit && state.openNotes[t.id]);
-    return `<li class="task ${isDone(t) ? "done" : ""}">
+    return `<li class="task ${isDone(t) ? "done" : ""} ${edit && state.activeTask === t.id ? "active" : ""}" ${edit ? `data-task="${t.id}"` : ""}>
       <button class="stamp ${st.key ? "set" : ""}" data-action="status" data-person="${person}" data-id="${t.id}" data-stamp="${t.id}"
         aria-label="Status: ${st.label}. Tap to change." title="${st.label}" ${ro}>${stampOf(t)}</button>
       <div class="body">
-        <input class="text" data-field="text" data-person="${person}" data-id="${t.id}" data-key="text-${t.id}" value="${esc(t.text)}" aria-label="Task" ${ro}>
+        <textarea class="text" rows="1" data-field="text" data-person="${person}" data-id="${t.id}" data-key="text-${t.id}" aria-label="Task" ${ro}>${esc(t.text)}</textarea>
         ${showNote ? `<input class="note" data-field="note" data-person="${person}" data-id="${t.id}" data-key="note-${t.id}" value="${esc(t.note)}" placeholder="Add a note" aria-label="Note" ${ro}>` : ""}
       </div>
       ${edit ? `<div class="tools">
@@ -435,6 +447,22 @@ function legendHTML() {
 }
 
 /* ---------- events ---------- */
+// Touch screens have no hover: tap a task to show its ♡ ✎ ✕, tap it again (or another task) to hide them
+const touchUI = () => matchMedia("(hover: none)").matches;
+let tapWasEditing = false; // the tap landed in a field that was already being edited
+app.addEventListener("pointerdown", e => {
+  tapWasEditing = e.target === document.activeElement && e.target.matches("textarea, input");
+});
+function toggleTools(e) {
+  if (e.target.closest(".tools, .picker, [data-action]:not(:disabled)")) return;
+  const li = e.target.closest(".task[data-task]");
+  let next = li ? li.dataset.task : null;
+  if (next && next === state.activeTask) { if (tapWasEditing) return; next = null; }
+  state.activeTask = next;
+  app.querySelectorAll(".task.active").forEach(x => x.classList.remove("active"));
+  if (next) li.classList.add("active");
+}
+
 app.addEventListener("click", e => {
   if (!state.user) {
     const dg = e.target.closest("[data-digit]");
@@ -443,6 +471,7 @@ app.addEventListener("click", e => {
     else if (e.target.closest("[data-reset-email]")) { saveEmail(""); state.pendingEmail = ""; state.pin = ""; state.pinErr = ""; renderLogin(); }
     return;
   }
+  if (touchUI()) toggleTools(e);
   const wd = e.target.closest("[data-date]");
   if (wd) { setDate(wd.dataset.date); render(); return; }
   const b = e.target.closest("[data-action]");
@@ -506,13 +535,17 @@ app.addEventListener("keydown", e => {
     mutate(el.dataset.add, state.date, d => { d.tasks.push(newTask(text)); });
     return;
   }
-  if (el.dataset.field) el.blur();
+  if (el.dataset.field) { e.preventDefault(); el.blur(); } // Enter finishes editing (no new lines in a task)
 });
+
+app.addEventListener("input", e => { if (e.target.matches("textarea.text")) fit(e.target); });
+// show the first lines again when editing ends
+app.addEventListener("focusout", e => { if (e.target.matches("textarea.text")) e.target.scrollTop = 0; });
 
 app.addEventListener("change", e => {
   const el = e.target, f = el.dataset.field;
   if (!f) return;
-  const { person, id } = el.dataset, v = el.value.trim();
+  const { person, id } = el.dataset, v = el.value.replace(/\s*\n+\s*/g, " ").trim(); // pasted line breaks become spaces
   const day = getDay(person, state.date);
   if (f === "comment") {
     if ((day ? day.comment : "") === v) return;
