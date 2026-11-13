@@ -4,7 +4,7 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut, updat
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { getFirestore, collection, doc, onSnapshot, setDoc }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=12";
+import { firebaseConfig, PIN_LENGTH, ASK_PIN_EVERY_TIME, STICKERS } from "./config.js?v=13";
 
 const fb = initializeApp(firebaseConfig);
 const auth = getAuth(fb);
@@ -51,9 +51,8 @@ function todayStr() { return fmt(new Date()); }
 function parse(s) { const [y, m, d] = s.split("-").map(Number); return new Date(y, m - 1, d); }
 function addDays(s, n) { const d = parse(s); d.setDate(d.getDate() + n); return fmt(d); }
 function weekOf(s) {
-  const d = parse(s); const shift = (d.getDay() + 6) % 7; // week starts Monday
-  const mon = addDays(s, -shift);
-  return Array.from({ length: 7 }, (_, i) => addDays(mon, i));
+  const sun = addDays(s, -parse(s).getDay()); // week starts Sunday (getDay: Sunday = 0)
+  return Array.from({ length: 7 }, (_, i) => addDays(sun, i));
 }
 
 function setDate(d) { state.date = d; state.calMonth = d.slice(0, 7); state.calOpen = false; }
@@ -341,7 +340,7 @@ function ratio(person, date) {
 function calHTML() {
   const [y, m] = state.calMonth.split("-").map(Number);
   const first = new Date(y, m - 1, 1);
-  const lead = (first.getDay() + 6) % 7;
+  const lead = first.getDay(); // empty cells before the 1st: the week starts Sunday
   const count = new Date(y, m, 0).getDate();
   const t = todayStr();
   let cells = "";
@@ -362,7 +361,7 @@ function calHTML() {
       <span>${first.toLocaleDateString("en-US", { month: "long", year: "numeric" })}</span>
       <button class="calnav" data-action="calnext" aria-label="Next month">›</button>
     </div>
-    <div class="calgrid">${["M","T","W","T","F","S","S"].map(x => `<span class="cw">${x}</span>`).join("")}${cells}</div>
+    <div class="calgrid">${["S","M","T","W","T","F","S"].map(x => `<span class="cw">${x}</span>`).join("")}${cells}</div>
     <button class="linkbtn caltoday" data-action="today">Back to today</button>
   </div>`;
 }
@@ -572,6 +571,140 @@ document.addEventListener("keydown", e => {
   if (e.key === "ArrowRight") { setDate(addDays(state.date, 1)); render(); }
 });
 
+/* ---------- download my records (.txt or .docx) ---------- */
+// Your own days, oldest first. A day with neither tasks nor a comment is skipped.
+function myRecords() {
+  const me = mySlot(); if (!me) return [];
+  return Object.entries(state.days)
+    .filter(([id, d]) => id.endsWith("_" + me) && ((d.tasks || []).length || d.comment))
+    .map(([id, d]) => ({ date: id.slice(0, 10), comment: d.comment || "", tasks: d.tasks || [] }))
+    .sort((a, b) => a.date.localeCompare(b.date));
+}
+const NOT_MARKED = "⬜"; // a task with no status yet
+const markOf = t => stampOf(t) || NOT_MARKED;
+const dayTitle = ds => ds + " (" + parse(ds).toLocaleDateString("en-US", { weekday: "short" }) + ")";
+const countText = n => n + " day" + (n === 1 ? "" : "s");
+const legendText = () => STATUS.slice(1).map(s => s.emoji + " " + s.label).join("   ") + "   " + NOT_MARKED + " Not marked   Any other emoji: a stamp (done)";
+
+function recordsText(days) {
+  const out = ["My daily list records", "Exported " + todayStr() + " · " + countText(days.length), "", legendText(), ""];
+  days.forEach(d => {
+    out.push(dayTitle(d.date));
+    if (d.comment) out.push("  Comment: " + d.comment);
+    d.tasks.forEach(t => {
+      out.push("  " + markOf(t) + " " + t.text);
+      if (t.note) out.push("      Note: " + t.note);
+    });
+    out.push("");
+  });
+  return new Blob(["\uFEFF" + out.join("\n")], { type: "text/plain;charset=utf-8" }); // BOM: older editors then read the emoji correctly
+}
+
+// A Word file is a zip of a few XML files. This writes the zip without compression, so no library is needed.
+const CRC_TABLE = (() => {
+  const t = new Uint32Array(256);
+  for (let n = 0; n < 256; n++) { let c = n; for (let k = 0; k < 8; k++) c = c & 1 ? 0xEDB88320 ^ (c >>> 1) : c >>> 1; t[n] = c >>> 0; }
+  return t;
+})();
+function crc32(bytes) {
+  let c = 0xFFFFFFFF;
+  for (let i = 0; i < bytes.length; i++) c = CRC_TABLE[(c ^ bytes[i]) & 0xFF] ^ (c >>> 8);
+  return (c ^ 0xFFFFFFFF) >>> 0;
+}
+function zipStore(files, mime) {
+  const enc = new TextEncoder(), now = new Date();
+  const time = (now.getHours() << 11) | (now.getMinutes() << 5) | (now.getSeconds() >> 1);
+  const date = ((now.getFullYear() - 1980) << 9) | ((now.getMonth() + 1) << 5) | now.getDate();
+  const parts = [], central = [];
+  let offset = 0;
+  for (const [name, text] of files) {
+    const nameB = enc.encode(name), data = enc.encode(text), crc = crc32(data);
+    const head = new DataView(new ArrayBuffer(30));
+    head.setUint32(0, 0x04034b50, true); head.setUint16(4, 20, true); head.setUint16(6, 0x0800, true); // 0x0800: names are UTF-8
+    head.setUint16(10, time, true); head.setUint16(12, date, true);
+    head.setUint32(14, crc, true); head.setUint32(18, data.length, true); head.setUint32(22, data.length, true);
+    head.setUint16(26, nameB.length, true);
+    const dir = new DataView(new ArrayBuffer(46));
+    dir.setUint32(0, 0x02014b50, true); dir.setUint16(4, 20, true); dir.setUint16(6, 20, true); dir.setUint16(8, 0x0800, true);
+    dir.setUint16(12, time, true); dir.setUint16(14, date, true);
+    dir.setUint32(16, crc, true); dir.setUint32(20, data.length, true); dir.setUint32(24, data.length, true);
+    dir.setUint16(28, nameB.length, true); dir.setUint32(42, offset, true);
+    parts.push(head, nameB, data);
+    central.push(dir, nameB);
+    offset += 30 + nameB.length + data.length;
+  }
+  const dirSize = central.reduce((n, p) => n + (p.byteLength ?? p.length), 0);
+  const end = new DataView(new ArrayBuffer(22));
+  end.setUint32(0, 0x06054b50, true); end.setUint16(8, files.length, true); end.setUint16(10, files.length, true);
+  end.setUint32(12, dirSize, true); end.setUint32(16, offset, true);
+  return new Blob([...parts, ...central, end], { type: mime });
+}
+
+const xmlEsc = s => String(s ?? "").replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001F\uFFFE\uFFFF]/g, "")
+  .replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const W_NS = 'xmlns:w="http://schemas.openxmlformats.org/wordprocessingml/2006/main"';
+const wRun = (text, o = {}) => {
+  const pr = (o.i ? "<w:i/>" : "") + (o.color ? `<w:color w:val="${o.color}"/>` : "") + (o.sz ? `<w:sz w:val="${o.sz}"/>` : "");
+  return `<w:r>${pr ? `<w:rPr>${pr}</w:rPr>` : ""}<w:t xml:space="preserve">${xmlEsc(text)}</w:t></w:r>`;
+};
+const wPara = (runs, o = {}) => {
+  const pr = (o.style ? `<w:pStyle w:val="${o.style}"/>` : "") + (o.left ? `<w:ind w:left="${o.left}"${o.hang ? ` w:hanging="${o.hang}"` : ""}/>` : "");
+  return `<w:p>${pr ? `<w:pPr>${pr}</w:pPr>` : ""}${runs}</w:p>`;
+};
+
+function recordsDocx(days) {
+  const grey = { color: "666666" }, small = { color: "666666", sz: 20 };
+  const body = [
+    wPara(wRun("My daily list records"), { style: "Heading1" }),
+    wPara(wRun("Exported " + todayStr() + " · " + countText(days.length), grey)),
+    wPara(wRun(legendText(), small))
+  ];
+  days.forEach(d => {
+    body.push(wPara(wRun(dayTitle(d.date)), { style: "Heading2" }));
+    if (d.comment) body.push(wPara(wRun("Comment: " + d.comment, { ...grey, i: true })));
+    d.tasks.forEach(t => {
+      // hanging indent: a wrapped task name lines up under the name, not under the mark
+      body.push(wPara(wRun(markOf(t)) + "<w:r><w:tab/></w:r>" + wRun(t.text), { left: 567, hang: 567 }));
+      if (t.note) body.push(wPara(wRun("Note: " + t.note, small), { left: 567 }));
+    });
+  });
+  const head = '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>';
+  const rel = (id, type, target) => `<Relationship Id="${id}" Type="http://schemas.openxmlformats.org/officeDocument/2006/relationships/${type}" Target="${target}"/>`;
+  const RELS = 'xmlns="http://schemas.openxmlformats.org/package/2006/relationships"';
+  const style = (id, name, size, before, level) => `<w:style w:type="paragraph" w:styleId="${id}"><w:name w:val="${name}"/><w:basedOn w:val="Normal"/><w:next w:val="Normal"/><w:qFormat/>` +
+    `<w:pPr><w:keepNext/><w:spacing w:before="${before}" w:after="80"/><w:outlineLvl w:val="${level}"/></w:pPr><w:rPr><w:b/><w:sz w:val="${size}"/><w:szCs w:val="${size}"/></w:rPr></w:style>`;
+  return zipStore([
+    ["[Content_Types].xml", head + '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +
+      '<Default Extension="rels" ContentType="application/vnd.openxmlformats-package.relationships+xml"/><Default Extension="xml" ContentType="application/xml"/>' +
+      '<Override PartName="/word/document.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.document.main+xml"/>' +
+      '<Override PartName="/word/styles.xml" ContentType="application/vnd.openxmlformats-officedocument.wordprocessingml.styles+xml"/></Types>'],
+    ["_rels/.rels", head + `<Relationships ${RELS}>${rel("rId1", "officeDocument", "word/document.xml")}</Relationships>`],
+    ["word/_rels/document.xml.rels", head + `<Relationships ${RELS}>${rel("rId1", "styles", "styles.xml")}</Relationships>`],
+    ["word/styles.xml", head + `<w:styles ${W_NS}><w:docDefaults><w:rPrDefault><w:rPr><w:rFonts w:ascii="Calibri" w:hAnsi="Calibri" w:cs="Calibri"/><w:sz w:val="22"/><w:szCs w:val="22"/></w:rPr></w:rPrDefault>` +
+      '<w:pPrDefault><w:pPr><w:spacing w:after="60" w:line="276" w:lineRule="auto"/></w:pPr></w:pPrDefault></w:docDefaults>' +
+      '<w:style w:type="paragraph" w:default="1" w:styleId="Normal"><w:name w:val="Normal"/><w:qFormat/></w:style>' +
+      style("Heading1", "heading 1", 36, 0, 0) + style("Heading2", "heading 2", 26, 280, 1) + "</w:styles>"],
+    ["word/document.xml", head + `<w:document ${W_NS}><w:body>${body.join("")}` +
+      '<w:sectPr><w:pgSz w:w="12240" w:h="15840"/><w:pgMar w:top="1440" w:right="1440" w:bottom="1440" w:left="1440" w:header="720" w:footer="720" w:gutter="0"/></w:sectPr></w:body></w:document>']
+  ], "application/vnd.openxmlformats-officedocument.wordprocessingml.document");
+}
+
+function saveFile(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = name;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 10000);
+}
+function downloadRecords(format) {
+  const msg = dlg.querySelector("#expMsg");
+  const days = myRecords();
+  if (!days.length) { msg.textContent = "There are no records to download yet."; return; }
+  const docx = format === "docx";
+  saveFile(docx ? recordsDocx(days) : recordsText(days), "daily-list-records-" + todayStr() + (docx ? ".docx" : ".txt"));
+  msg.textContent = "Downloaded " + countText(days.length) + ".";
+}
+
 /* ---------- settings ---------- */
 const dlg = document.getElementById("settings");
 function openSettings() {
@@ -582,6 +715,18 @@ function openSettings() {
     <div class="mine">
       <label for="myName">My name</label><input id="myName" value="${esc(state.settings.names[me])}" maxlength="30">
       <label for="myRoutines" style="margin-top:12px">My daily routines</label><textarea id="myRoutines">${esc((state.settings.recurring[me] || []).join("\n"))}</textarea>
+    </div>
+    <div class="exportset">
+      <h3>Download my records</h3>
+      <p>Every day of your list with its task marks, notes and comments, in one file.</p>
+      <div class="exprow">
+        <select id="expFormat" aria-label="File format">
+          <option value="txt">Text (.txt)</option>
+          <option value="docx">Word (.docx)</option>
+        </select>
+        <button type="button" class="pill" data-export>Download</button>
+      </div>
+      <div class="expmsg" id="expMsg" role="status"></div>
     </div>` : ""}
     <div class="pinset">
       <h3>Change my PIN</h3>
@@ -599,6 +744,10 @@ function openSettings() {
   </form>`;
   dlg.showModal();
 }
+// type="button": the download does not close the dialog
+dlg.addEventListener("click", e => {
+  if (e.target.closest("[data-export]")) downloadRecords(dlg.querySelector("#expFormat").value);
+});
 dlg.addEventListener("close", () => {
   if (dlg.returnValue === "signout") { signOut(auth); return; }
   if (dlg.returnValue === "pin") { changePin(dlg.querySelector("#pin1").value, dlg.querySelector("#pin2").value); return; }
